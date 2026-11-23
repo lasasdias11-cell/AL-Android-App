@@ -7,13 +7,13 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
-import android.webkit.SslError
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -283,8 +283,8 @@ class MainActivity : AppCompatActivity() {
         if (uri.scheme?.equals("https", ignoreCase = true) != true) return false
         if (uri.host?.equals(APP_HOST, ignoreCase = true) != true) return false
 
-        val path = uri.path ?: return false
-        return path == APP_PATH || path.startsWith("$APP_PATH/")
+        val path: String = uri.path ?: return false
+        return path == APP_PATH || path.startsWith(prefix = "$APP_PATH/")
     }
 
     @Deprecated("Deprecated in Java")

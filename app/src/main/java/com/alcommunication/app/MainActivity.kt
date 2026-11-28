@@ -6,6 +6,7 @@ import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -28,6 +29,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -36,10 +41,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var lockedMessage: TextView
     private lateinit var splashOverlay: View
     private lateinit var rootBanner: View
+    private lateinit var rootLayout: View
     private lateinit var biometricPrompt: BiometricPrompt
 
     private var hasLoadedUrl = false
     private var rootWarningShown = false
+    private var pageReadyForInsets = false
+    private var safeTopPx = 0
+    private var safeBottomPx = 0
+    private var safeLeftPx = 0
+    private var safeRightPx = 0
 
     private val deviceCredentialLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -66,12 +77,18 @@ class MainActivity : AppCompatActivity() {
         lockedMessage = findViewById(R.id.lockedMessage)
         splashOverlay = findViewById(R.id.splashOverlay)
         rootBanner = findViewById(R.id.rootBanner)
+        rootLayout = findViewById(R.id.rootLayout)
 
         findViewById<Button>(R.id.btnUnlock).setOnClickListener { authenticate() }
         findViewById<Button>(R.id.btnSecuritySettings).setOnClickListener { openSecuritySettings() }
 
         configureBiometricPrompt()
         configureWebView(webView)
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { _, windowInsets ->
+            updateSafeAreaInsets(windowInsets)
+        }
+        ViewCompat.requestApplyInsets(rootLayout)
 
         webView.visibility = View.GONE
         splashOverlay.visibility = View.GONE
@@ -183,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         showRootWarningBanner()
+        ViewCompat.requestApplyInsets(rootLayout)
     }
 
     private fun hideSplash() {
@@ -238,8 +256,15 @@ class MainActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
                 shouldOpenExternally(Uri.parse(url))
 
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                pageReadyForInsets = false
+            }
+
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
+                pageReadyForInsets = true
+                injectSafeAreaInsets()
                 hideSplash()
             }
 
@@ -266,6 +291,50 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
+    }
+
+    private fun updateSafeAreaInsets(windowInsets: WindowInsetsCompat): WindowInsetsCompat {
+        val systemBars = windowInsets.getInsets(
+            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+        )
+        val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime())
+
+        safeTopPx = systemBars.top
+        safeBottomPx = maxOf(systemBars.bottom, ime.bottom)
+        safeLeftPx = maxOf(systemBars.left, ime.left)
+        safeRightPx = maxOf(systemBars.right, ime.right)
+
+        if (::rootLayout.isInitialized) {
+            rootLayout.setPadding(safeLeftPx, safeTopPx, safeRightPx, safeBottomPx)
+        }
+
+        if (pageReadyForInsets) {
+            injectSafeAreaInsets()
+        }
+
+        // Consume the insets applied natively to rootLayout so WebView does not double-pad env(safe-area-inset-*).
+        return WindowInsetsCompat.Builder(windowInsets)
+            .setInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime(),
+                Insets.NONE
+            )
+            .build()
+    }
+
+    private fun injectSafeAreaInsets() {
+        if (!::webView.isInitialized) return
+        val script = """
+            (function () {
+                var style = document.documentElement.style;
+                style.setProperty('--sat', '0px');
+                style.setProperty('--sab', '0px');
+                style.setProperty('--sal', '0px');
+                style.setProperty('--sar', '0px');
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(script, null)
     }
 
     private fun shouldOpenExternally(uri: Uri?): Boolean {
@@ -297,6 +366,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyEdgeToEdgeSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.parseColor("#020617")
 
@@ -305,11 +376,17 @@ class MainActivity : AppCompatActivity() {
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
 
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
     }
 
     private val allowedAuthenticators: Int
